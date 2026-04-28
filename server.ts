@@ -402,16 +402,26 @@ Thank you for buying! Have a great day! ✨
     });
     app.use(vite.middlewares);
   } else {
+    // Production: Serve static files from 'dist'
     const distPath = path.join(process.cwd(), 'dist');
     app.use(express.static(distPath));
+    // Important: Let the API routes handle things first, then fall back to SPA for UI routes
     app.get('*', (req, res) => {
+      // If the request is for an API that doesn't exist, this will serve index.html
+      // Vercel routes will catch /api/* first usually, but this is a safety fallback
       res.sendFile(path.join(distPath, 'index.html'));
     });
   }
 
-  app.listen(PORT, '0.0.0.0', () => {
-    console.log(`Server running on http://localhost:${PORT}`);
-  });
+  // Only listen on port if not running as a Vercel/Serverless function
+  if (process.env.NODE_ENV !== 'production' || !process.env.VERCEL) {
+    app.listen(PORT, '0.0.0.0', () => {
+      console.log(`Server running on http://localhost:${PORT}`);
+    });
+  }
 }
 
-startServer();
+// Ensure the server starts, but exports the app
+startServer().catch(err => {
+  console.error('Failed to start server:', err);
+});
