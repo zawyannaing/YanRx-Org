@@ -49,14 +49,14 @@ export function ProductCard({ product, onOrder }: ProductCardProps) {
         <div className="flex justify-between items-start mb-5">
           <div className="max-w-[80%]">
             <div className="flex items-center gap-2 mb-1.5">
-              <span className="text-[10px] font-bold uppercase tracking-widest text-brand bg-brand/10 px-2 py-0.5 rounded-full">
+              <span className="text-[10px] font-bold uppercase tracking-widest text-brand-dark bg-brand/10 px-2 py-0.5 rounded-full">
                 {product.category || 'Premium'}
               </span>
             </div>
             <h3 className="text-[20px] font-bold text-black tracking-tight leading-tight group-hover:text-brand transition-colors">
               {product.title}
             </h3>
-            <p className="text-[14px] text-[#8E8E93] mt-2 leading-relaxed font-medium">
+            <p className="text-[14px] text-gray-600 mt-2 leading-relaxed font-medium">
               {product.description}
             </p>
           </div>
@@ -77,7 +77,7 @@ export function ProductCard({ product, onOrder }: ProductCardProps) {
               <span className="opacity-90">{v.label}</span>
               <span className={cn(
                 "text-[12px] mt-1",
-                selectedVariant.id === v.id ? "text-white/80" : "text-[#8E8E93]"
+                selectedVariant.id === v.id ? "text-white/70" : "text-gray-500"
               )}>
                 {v.price} {v.currency}
               </span>

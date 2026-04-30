@@ -300,7 +300,7 @@ export default function App() {
         {/* Search & Filters */}
         <div className="mb-8 space-y-4">
           <div className="relative group">
-            <Search className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-[#8E8E93] group-focus-within:text-brand transition-colors" />
+            <Search className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-gray-500 group-focus-within:text-brand transition-colors" />
             <input 
               type="text"
               placeholder="Search premium plans..."
@@ -316,8 +316,8 @@ export default function App() {
               className={cn(
                 "px-5 py-2.5 rounded-2xl text-xs font-bold uppercase tracking-wider transition-all shrink-0",
                 !selectedCategory 
-                  ? "bg-black text-white shadow-xl shadow-black/10" 
-                  : "glass-card text-[#8E8E93] hover:text-[#007AFF]"
+                  ? "bg-brand text-white shadow-xl shadow-brand/20" 
+                  : "glass-card text-gray-500 hover:text-brand"
               )}
             >
               All Plans
@@ -329,8 +329,8 @@ export default function App() {
                 className={cn(
                   "px-5 py-2.5 rounded-2xl text-xs font-bold uppercase tracking-wider transition-all shrink-0",
                   selectedCategory === category
-                    ? "bg-black text-white shadow-xl shadow-black/10" 
-                    : "glass-card text-[#8E8E93] hover:text-[#007AFF]"
+                    ? "bg-brand text-white shadow-xl shadow-brand/20" 
+                    : "glass-card text-gray-500 hover:text-brand"
                 )}
               >
                 {category}
@@ -340,7 +340,7 @@ export default function App() {
               onClick={() => setShowFilters(!showFilters)}
               className={cn(
                 "p-2.5 rounded-2xl transition-all ml-auto",
-                showFilters ? "bg-brand text-white" : "glass-card text-[#8E8E93]"
+                showFilters ? "bg-brand text-white" : "glass-card text-gray-500"
               )}
             >
               <SlidersHorizontal className="w-5 h-5" />
@@ -360,7 +360,7 @@ export default function App() {
                   <div className="flex items-center justify-between mb-8">
                     <div>
                       <p className="text-sm font-black text-[#1C1C1E] mb-1">Max Budget</p>
-                      <p className="text-[10px] uppercase font-bold tracking-widest text-[#8E8E93]">Slide to adjust</p>
+                      <p className="text-[10px] uppercase font-bold tracking-widest text-gray-500">Slide to adjust</p>
                     </div>
                     <p className="text-[15px] font-black text-brand bg-brand/10 px-4 py-2 rounded-2xl">
                       {priceRange.max >= 50000 ? 'No Limit' : '$' + priceRange.max}
@@ -375,7 +375,7 @@ export default function App() {
                     onChange={(e) => setPriceRange(prev => ({ ...prev, max: Number(e.target.value) || 0 }))}
                     className="w-full accent-brand mb-2"
                   />
-                  <div className="flex justify-between text-[10px] font-bold text-[#8E8E93] uppercase tracking-widest mt-1">
+                  <div className="flex justify-between text-[10px] font-bold text-gray-500 uppercase tracking-widest mt-1">
                     <span>Low Range</span>
                     <span>High Range</span>
                   </div>
@@ -388,7 +388,7 @@ export default function App() {
         {/* Featured Item (Bento Grid Style) */}
         {!searchQuery && !selectedCategory && filteredProducts.length > 0 && products[0] && (
           <div className="mb-8">
-            <h3 className="text-[12px] font-bold text-[#8E8E93] uppercase tracking-[0.2em] mb-3 px-1">
+            <h3 className="text-[12px] font-bold text-gray-500 uppercase tracking-[0.2em] mb-3 px-1">
               Store Highlight
             </h3>
             <ProductCard
@@ -459,7 +459,7 @@ export default function App() {
                     setSelectedCategory(null);
                     setPriceRange({ min: 0, max: 100000 });
                   }}
-                  className="px-8 py-4 bg-black text-white rounded-2xl font-bold shadow-2xl active:scale-95 transition-all"
+                  className="px-8 py-4 bg-brand text-white rounded-2xl font-bold shadow-2xl active:scale-95 transition-all"
                 >
                   Clear All Filters
                 </button>

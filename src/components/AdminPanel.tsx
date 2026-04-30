@@ -331,8 +331,8 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onClose, onProductsUpdat
     return (
       <div className="fixed inset-0 bg-white z-[60] flex items-center justify-center p-6 animate-in slide-in-from-bottom duration-300">
         <div className="w-full max-w-sm space-y-8 text-center">
-          <div className="mx-auto w-20 h-20 bg-brand/10 rounded-3xl flex items-center justify-center">
-            <LayoutGrid className="w-10 h-10 text-brand" />
+          <div className="mx-auto w-20 h-20 bg-brand/20 rounded-3xl flex items-center justify-center">
+            <LayoutGrid className="w-10 h-10 text-brand-dark" />
           </div>
           <div>
             <h1 className="text-2xl font-bold text-gray-900">Admin Login</h1>
@@ -514,7 +514,7 @@ CREATE POLICY "Admin Update" ON orders FOR UPDATE USING (true);`}
               tabIndex={0}
               onClick={() => setActiveTab('products')}
               onKeyDown={(e) => e.key === 'Enter' && setActiveTab('products')}
-              className={`flex items-center gap-2 px-6 py-2.5 rounded-xl font-bold transition-all cursor-pointer ${
+               className={`flex items-center gap-2 px-6 py-2.5 rounded-xl font-bold transition-all cursor-pointer ${
                 activeTab === 'products' ? 'bg-brand text-white shadow-lg shadow-brand/20' : 'text-gray-500 hover:text-gray-900'
               }`}
             >
@@ -523,7 +523,7 @@ CREATE POLICY "Admin Update" ON orders FOR UPDATE USING (true);`}
               {activeTab === 'products' && (
                 <button 
                   onClick={(e) => { e.stopPropagation(); fetchProducts(); }}
-                  className="ml-2 p-1 hover:bg-white/20 rounded-lg"
+                  className="ml-2 p-1 hover:bg-black/10 rounded-lg"
                   title="Refresh List"
                 >
                   <RefreshCw className={`w-3.5 h-3.5 ${isLoading ? 'animate-spin' : ''}`} />

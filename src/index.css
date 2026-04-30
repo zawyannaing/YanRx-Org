@@ -5,21 +5,22 @@
   --font-sans: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
   --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, monospace;
   --color-ios-blue: #960c4d;
-  --color-brand: #960c4d;
-  --color-brand-light: #fdf2f8;
+  --color-brand: #260420;
+  --color-brand-dark: #1a0316;
+  --color-brand-light: #f3eef2;
+  --color-ios-blue: #260420;
   --color-ios-pink: #FF2D55;
   --color-ios-indigo: #5856D6;
 }
 
 @layer base {
   body {
-    @apply antialiased text-[#1C1C1E] bg-[#FDF2F8] overflow-x-hidden;
+    @apply antialiased text-[#1C1C1E] bg-[#fafafa] overflow-x-hidden;
     -webkit-tap-highlight-color: transparent;
     background: 
-      radial-gradient(at 0% 0%, rgba(150, 12, 77, 0.08) 0px, transparent 50%),
-      radial-gradient(at 50% 0%, rgba(255, 45, 85, 0.04) 0px, transparent 50%),
-      radial-gradient(at 100% 0%, rgba(150, 12, 77, 0.08) 0px, transparent 50%),
-      #FDF2F8;
+      radial-gradient(at 0% 0%, rgba(38, 4, 32, 0.05) 0px, transparent 50%),
+      radial-gradient(at 100% 0%, rgba(38, 4, 32, 0.05) 0px, transparent 50%),
+      #fafafa;
     background-attachment: fixed;
   }
 }
