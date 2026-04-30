@@ -270,23 +270,33 @@ export default function App() {
       <header className="px-5 py-4 bg-white/60 backdrop-blur-xl border-b border-white/40 sticky top-0 z-40 transition-all">
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-3">
-            <div className="bg-brand/5 p-2 px-3 rounded-2xl border border-brand/10">
-               <div className="flex items-center gap-2 mb-0.5">
-                 <div className="w-1.5 h-1.5 bg-brand rounded-full animate-pulse" />
-                 <p className="text-[9px] font-bold text-brand-dark uppercase tracking-widest">Balance</p>
-               </div>
-               <p className="text-xl font-black text-black tracking-tight leading-none">${userBalance.toFixed(2)}</p>
+            <div className="w-12 h-12 bg-white rounded-2xl flex items-center justify-center shadow-lg shadow-brand/10 overflow-hidden border border-brand/10">
+              <img 
+                src="https://storage.googleapis.com/bit-academy-static-assets/bi-bi-logo.png" 
+                alt="Bi Bi Logo" 
+                className="w-full h-full object-cover"
+                referrerPolicy="no-referrer"
+                onError={(e) => {
+                  (e.target as HTMLImageElement).src = 'https://api.dicebear.com/7.x/bottts/svg?seed=BiBi';
+                }}
+              />
+            </div>
+            <div>
+              <h1 className="text-[18px] font-black text-black tracking-tight leading-none">Bi Bi</h1>
+              <span className="text-[10px] uppercase tracking-[0.2em] font-bold text-brand">Digital Store</span>
             </div>
           </div>
           
           <div className="flex items-center gap-2">
             <button 
-              onClick={() => updateBalance(10)}
-              disabled={isUpdatingBalance}
-              className="p-2.5 glass-button rounded-xl text-brand active:scale-95 transition-all disabled:opacity-50"
-              title="Claim Bonus"
+              onClick={() => {
+                WebApp.openTelegramLink('https://t.me/yanrx4');
+                WebApp.HapticFeedback?.impactOccurred('light');
+              }}
+              className="p-2.5 glass-button rounded-xl text-brand"
+              title="Support"
             >
-              <RefreshCw className={cn("w-5 h-5", isUpdatingBalance && "animate-spin")} />
+              <MessageCircle className="w-5 h-5" />
             </button>
             <button 
               onClick={() => {
