@@ -26,6 +26,8 @@ export interface Order {
   product_id: string;
   variant_id: string;
   user_info: UserInfo;
+  payment_method?: string;
+  transaction_id?: string;
   status: 'pending' | 'completed' | 'cancelled';
   created_at?: string;
 }

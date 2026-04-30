@@ -23,46 +23,51 @@ export default app;
 async function startServer() {
   const PORT = 3000;
 
-  app.use(express.json());
+  app.use(express.json({ limit: '10mb' }));
 
   // API Routes
-  app.post('/api/notify-order', async (req, res) => {
-    const { order, userInfo, selectedVariant, orderId, telegramId } = req.body;
-    const token = process.env.TELEGRAM_BOT_TOKEN?.trim();
-    const adminId = process.env.TELEGRAM_ADMIN_ID?.trim();
+  app.post('/api/notify-order', (req, res) => {
+    // 1. Respond immediately to the client to avoid timeout or delay
+    res.json({ status: 'queued' });
 
-    // Check if keys are missing or using placeholder values from .env.example
-    const isConfigured = token && adminId && 
-                        token !== 'your-bot-token' && 
-                        adminId !== 'your-telegram-user-id';
+    // 2. Process Telegram notification in the background
+    const executeNotification = async () => {
+      const { order, userInfo, selectedVariant, orderId, telegramId, paymentMethod, transactionId } = req.body;
+      const tId = transactionId || req.body.transaction_id || req.body.transId || 'N/A';
+      const pMethod = paymentMethod || req.body.payment_method || 'N/A';
+      
+      const token = process.env.TELEGRAM_BOT_TOKEN?.trim();
+      const adminId = process.env.TELEGRAM_ADMIN_ID?.trim();
 
-    if (!isConfigured) {
-      console.error('Telegram config missing or using placeholders');
-      return res.status(400).json({ 
-        error: 'Telegram Bot is not configured. Please set TELEGRAM_BOT_TOKEN and TELEGRAM_ADMIN_ID in the Secrets panel.' 
+      // Check if keys are missing
+      const isConfigured = token && adminId && 
+                          token !== 'your-bot-token' && 
+                          adminId !== 'your-telegram-user-id';
+
+      if (!isConfigured) {
+        console.error('Telegram background config missing');
+        return;
+      }
+
+      const myanmarTime = new Date().toLocaleString('en-US', { 
+        timeZone: 'Asia/Yangon',
+        dateStyle: 'medium',
+        timeStyle: 'medium'
       });
-    }
 
-    const myanmarTime = new Date().toLocaleString('en-US', { 
-      timeZone: 'Asia/Yangon',
-      dateStyle: 'medium',
-      timeStyle: 'medium'
-    });
+      const escapeHtml = (text: string = '') => text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+      const displayOrderId = orderId ? (typeof orderId === 'string' ? orderId.split('-')[0].toUpperCase() : orderId) : 'N/A';
 
-    const escapeHtml = (text: string) => {
-      return text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-    };
-
-    const displayOrderId = orderId ? (typeof orderId === 'string' ? orderId.split('-')[0].toUpperCase() : orderId) : 'N/A';
-
-    // 1. Message for Admin (HTML Mode)
-    const adminMessage = `
+      const adminMessage = `
 🌟 <b>New Order Received!</b>
 -----------------
 🆔 <b>Order ID:</b> <code>${displayOrderId}</code>
 📦 <b>Product:</b> <code>${escapeHtml(order.title)}</code>
 💰 <b>Amount:</b> <code>${selectedVariant.price} ${selectedVariant.currency || 'USD'}</code>
 ⏱️ <b>Plan:</b> <code>${escapeHtml(selectedVariant.label)}</code>
+⚡️ <b>Payment Details:</b>
+💳 <b>Method:</b> <code>${escapeHtml(pMethod)}</code>
+🔑 <b>Last 6 Digits:</b> <code>${escapeHtml(tId)}</code>
 💳 <b>Status:</b> ⏳ <code>Pending</code>
 
 👤 <b>Customer Details:</b>
@@ -71,10 +76,9 @@ async function startServer() {
 - TG ID: <code>${telegramId || 'N/A'}</code>
 
 📅 <b>Time:</b> ${myanmarTime} MMT
-    `;
+      `;
 
-    // 2. Message for Customer (HTML Mode)
-    const customerMessage = `
+      const customerMessage = `
 ✅ <b>Order Received!</b>
 -----------------
 Hello ${escapeHtml(userInfo.name)}, your order has been received and is being processed.
@@ -83,58 +87,34 @@ Hello ${escapeHtml(userInfo.name)}, your order has been received and is being pr
 📦 <b>Product:</b> <code>${escapeHtml(order.title)}</code>
 ⏱️ <b>Plan:</b> <code>${escapeHtml(selectedVariant.label)}</code>
 💰 <b>Price:</b> <code>${selectedVariant.price} ${selectedVariant.currency || 'USD'}</code>
+💳 <b>Payment:</b> <code>${escapeHtml(pMethod)}</code>
+🔑 <b>Trans ID:</b> <code>***${escapeHtml(tId)}</code>
 
 📅 <b>Date:</b> ${myanmarTime}
-💳 <b>Payment:</b> Please wait for an agent to contact you or use the support button in the app.
 
-Thank you for choosing Us!
-    `;
+🚀 We will notify you here once your order is confirmed. Thank you!
+      `;
 
-    try {
-      console.log('Sending order notification to Telegram admin ID:', adminId, 'for Order ID:', orderId);
-      // Notify Admin with Interactive Buttons
-      // Ensure orderId is string and not empty
-      const safeOrderId = orderId || 'unknown';
-      
-      if (safeOrderId === 'unknown') {
-        console.warn('Warning: Notifying order with unknown ID. Confirm buttons will not work.');
-      }
+      try {
+        await axios.post(`https://api.telegram.org/bot${token}/sendMessage`, {
+          chat_id: adminId,
+          text: adminMessage,
+          parse_mode: 'HTML'
+        });
 
-      const adminResponse = await axios.post(`https://api.telegram.org/bot${token}/sendMessage`, {
-        chat_id: adminId,
-        text: adminMessage,
-        parse_mode: 'HTML',
-        reply_markup: {
-          inline_keyboard: [
-            [
-              { text: '✅ Confirm Order', callback_data: `conf:${safeOrderId}` },
-              { text: '❌ Decline', callback_data: `decl:${safeOrderId}` }
-            ]
-          ]
-        }
-      });
-      console.log('Telegram Admin Notification Success:', adminResponse.data);
-
-      // Reply to Customer (if telegramId is provided)
-      if (telegramId) {
-        try {
-          const customerResponse = await axios.post(`https://api.telegram.org/bot${token}/sendMessage`, {
+        if (telegramId) {
+          await axios.post(`https://api.telegram.org/bot${token}/sendMessage`, {
             chat_id: telegramId,
             text: customerMessage,
             parse_mode: 'HTML',
-          });
-          console.log('Telegram Customer Notification Success:', customerResponse.data);
-        } catch (custError: any) {
-          console.warn('Telegram Customer Notification Failed:', custError.response?.data || custError.message);
+          }).catch(() => {});
         }
+      } catch (error: any) {
+        console.error('Background Telegram API Error:', error.response?.data || error.message);
       }
+    };
 
-      res.json({ success: true });
-    } catch (error: any) {
-      const errorData = error.response?.data || error.message;
-      console.error('Telegram API Error (Admin Notify):', errorData);
-      res.status(500).json({ error: 'Failed to send notification', details: errorData });
-    }
+    executeNotification();
   });
 
   // Unified API to update order status and notify customer

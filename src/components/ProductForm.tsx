@@ -15,6 +15,8 @@ export const ProductForm: React.FC<ProductFormProps> = ({ product, onSave, onCan
   const [category, setCategory] = useState('');
   const [variants, setVariants] = useState<Variant[]>([]);
 
+  const [isSubmitting, setIsSubmitting] = useState(false);
+
   useEffect(() => {
     if (product) {
       setTitle(product.title);
@@ -23,12 +25,14 @@ export const ProductForm: React.FC<ProductFormProps> = ({ product, onSave, onCan
       setCategory(product.category || '');
       setVariants([...product.variants]);
     } else {
-      setVariants([{ id: crypto.randomUUID(), label: '1 Month', price: 0, currency: 'USD' }]);
+      const newId = typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : Math.random().toString(36).substring(2, 11);
+      setVariants([{ id: newId, label: '1 Month', price: 0, currency: 'USD' }]);
     }
   }, [product]);
 
   const addVariant = () => {
-    setVariants([...variants, { id: crypto.randomUUID(), label: '', price: 0, currency: 'USD' }]);
+    const newId = typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : Math.random().toString(36).substring(2, 11);
+    setVariants([...variants, { id: newId, label: '', price: 0, currency: 'USD' }]);
   };
 
   const removeVariant = (id: string) => {
@@ -39,20 +43,27 @@ export const ProductForm: React.FC<ProductFormProps> = ({ product, onSave, onCan
     setVariants(variants.map(v => v.id === id ? { ...v, ...updates } : v));
   };
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    onSave({
-      id: product?.id,
-      title,
-      description,
-      image_url: imageUrl,
-      category,
-      variants
-    });
+    if (isSubmitting) return;
+
+    setIsSubmitting(true);
+    try {
+      await onSave({
+        id: product?.id,
+        title,
+        description,
+        image_url: imageUrl,
+        category,
+        variants
+      });
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm animate-in fade-in duration-200">
+    <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm animate-in fade-in duration-200">
       <div className="bg-white w-full max-w-2xl rounded-3xl overflow-hidden shadow-2xl flex flex-col max-h-[90vh]">
         <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100">
           <h2 className="text-xl font-bold text-gray-900">
@@ -193,8 +204,10 @@ export const ProductForm: React.FC<ProductFormProps> = ({ product, onSave, onCan
             </button>
             <button
               type="submit"
-              className="flex-[2] py-4 text-[16px] font-bold text-white bg-[#007AFF] rounded-xl active:scale-[0.98] transition-all shadow-lg shadow-[#007AFF]/20"
+              disabled={isSubmitting}
+              className="flex-[2] py-4 text-[16px] font-bold text-white bg-[#007AFF] rounded-xl active:scale-[0.98] transition-all shadow-lg shadow-[#007AFF]/20 disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
             >
+              {isSubmitting && <Plus className="w-4 h-4 animate-spin" />}
               {product ? 'Update Product' : 'Create Product'}
             </button>
           </div>

@@ -6,7 +6,7 @@ import { ProductCard } from './components/ProductCard';
 import { OrderModal } from './components/OrderModal';
 import { AdminPanel } from './components/AdminPanel';
 import { motion, AnimatePresence } from 'motion/react';
-import { ShoppingBag, Sparkles, CheckCircle2, AlertCircle, X, Shield, MessageCircle, Search, SlidersHorizontal, ChevronDown } from 'lucide-react';
+import { ShoppingBag, Sparkles, CheckCircle2, AlertCircle, X, Shield, MessageCircle, Search, SlidersHorizontal, ChevronDown, RefreshCw } from 'lucide-react';
 import axios from 'axios';
 import { cn } from './lib/utils';
 
@@ -14,6 +14,7 @@ import { cn } from './lib/utils';
 export default function App() {
   const [products, setProducts] = useState<Product[]>([]);
   const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
   const [selectedOrder, setSelectedOrder] = useState<{ product: Product; variant: Variant } | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [status, setStatus] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
@@ -23,17 +24,40 @@ export default function App() {
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedCategory, setSelectedCategory] = useState<string | null>(null);
   const [showFilters, setShowFilters] = useState(false);
-  const [priceRange, setPriceRange] = useState<{ min: number; max: number }>({ min: 0, max: 1000 });
+  const [priceRange, setPriceRange] = useState<{ min: number; max: number }>({ min: 0, max: 100000 });
 
   const categories = Array.from(new Set(products.map(p => p.category).filter(Boolean))) as string[];
 
   const filteredProducts = products.filter(product => {
-    const matchesSearch = product.title.toLowerCase().includes(searchQuery.toLowerCase()) || 
-                         product.description.toLowerCase().includes(searchQuery.toLowerCase());
-    const matchesCategory = !selectedCategory || product.category === selectedCategory;
+    const title = (product.title || '').toLowerCase();
+    const description = (product.description || '').toLowerCase();
+    const category = (product.category || '').toLowerCase();
+    const search = searchQuery.toLowerCase();
     
-    const productMinPrice = Math.min(...product.variants.map(v => v.price));
-    const matchesPrice = productMinPrice >= priceRange.min && productMinPrice <= priceRange.max;
+    const matchesSearch = title.includes(search) || description.includes(search);
+    const matchesCategory = !selectedCategory || category === selectedCategory.toLowerCase();
+    
+    // Parse variants if they're somehow a string (Supabase safety)
+    let variants = product.variants;
+    if (typeof variants === 'string') {
+      try {
+        variants = JSON.parse(variants);
+      } catch (e) {
+        variants = [];
+      }
+    }
+
+    const hasVariants = variants && Array.isArray(variants) && variants.length > 0;
+    if (!hasVariants) {
+      return matchesSearch && matchesCategory;
+    }
+
+    const prices = variants.map(v => Number(v.price) || 0);
+    const productMinPrice = Math.min(...prices);
+    const productMaxPrice = Math.max(...prices);
+    
+    // Match if ANY part of our price range overlaps with the product's price range
+    const matchesPrice = productMinPrice <= priceRange.max && productMaxPrice >= priceRange.min;
 
     return matchesSearch && matchesCategory && matchesPrice;
   });
@@ -48,27 +72,58 @@ export default function App() {
     document.documentElement.style.setProperty('--tg-theme-button-color', WebApp.themeParams.button_color || '#2481cc');
     document.documentElement.style.setProperty('--tg-theme-button-text-color', WebApp.themeParams.button_text_color || '#ffffff');
 
-    fetchProducts();
+    fetchProducts(true);
   }, []);
 
-  const fetchProducts = async () => {
+  const fetchProducts = async (initial = false) => {
+    if (initial) setLoading(true);
+    else setRefreshing(true);
+
     try {
       if (supabase) {
+        console.log('App: Fetching products...');
         const { data, error } = await supabase
           .from('products')
-          .select('*');
+          .select('*')
+          .order('created_at', { ascending: false });
         
-        if (error) throw error;
+        if (error) {
+          console.error('Supabase fetch error:', error);
+          throw error;
+        }
+        console.log(`Successfully fetched ${data?.length || 0} products`);
+        if (data && data.length > 0) {
+          console.log('Product Raw Sample:', data[0]);
+          console.table(data.map(p => ({ 
+            id: p.id, 
+            title: p.title, 
+            category: p.category, 
+            v_count: p.variants?.length,
+            v_type: typeof p.variants,
+            v_is_arr: Array.isArray(p.variants)
+          })));
+        } else {
+          console.warn('Database returned 0 products. Check your RLS policies or tables.');
+        }
         setProducts(data || []);
+        setStatus(null);
+      } else {
+        console.warn('Supabase not configured');
+        setStatus({ type: 'error', message: 'Database not configured. Please check Settings.' });
       }
-    } catch (error) {
+    } catch (error: any) {
       console.error('Error fetching products:', error);
+      setStatus({ 
+        type: 'error', 
+        message: `Failed to load products: ${error.message || 'Check database connection'}` 
+      });
     } finally {
-      setLoading(false);
+      if (initial) setLoading(false);
+      else setRefreshing(false);
     }
   };
 
-  const handleOrderSubmit = async (userInfo: UserInfo): Promise<string | undefined> => {
+  const handleOrderSubmit = async (userInfo: UserInfo, paymentMethod: string, transactionId: string): Promise<string | undefined> => {
     if (!selectedOrder) return;
     
     setIsSubmitting(true);
@@ -81,15 +136,19 @@ export default function App() {
         throw new Error('Supabase is not configured. Please check your Settings.');
       }
 
-      const orderData: any = {
+      const orderData: Partial<Order> = {
         product_id: selectedOrder.product.id,
         variant_id: selectedOrder.variant.id,
         user_info: {
           ...userInfo,
           telegram_id: WebApp.initDataUnsafe.user?.id
         },
+        payment_method: paymentMethod,
+        transaction_id: transactionId,
         status: 'pending'
       };
+      
+      console.log('App: Saving order to Supabase...', orderData);
       
       const { data, error, status: dbStatus, statusText } = await supabase
         .from('orders')
@@ -113,6 +172,8 @@ export default function App() {
         order: selectedOrder.product,
         selectedVariant: selectedOrder.variant,
         userInfo: userInfo,
+        paymentMethod: paymentMethod,
+        transactionId: transactionId,
         orderId: orderId,
         telegramId: WebApp.initDataUnsafe.user?.id
       }).catch(tgError => console.warn('Background Telegram notification failed:', tgError));
@@ -155,91 +216,121 @@ export default function App() {
   }
 
   return (
-    <div className="min-h-screen bg-[#F2F2F7] pb-12 font-sans selection:bg-[#007AFF]/10">
+    <div className="min-h-screen bg-transparent pb-12 font-sans selection:bg-brand/10">
+      {/* Dynamic Background Elements */}
+      <div className="fixed inset-0 z-[-1] overflow-hidden pointer-events-none">
+        <div className="absolute top-[-10%] left-[-10%] w-[40%] h-[40%] bg-brand/10 blur-[120px] rounded-full animate-float" />
+        <div className="absolute bottom-[10%] right-[-5%] w-[30%] h-[30%] bg-brand/5 blur-[100px] rounded-full animate-float [animation-delay:2s]" />
+      </div>
+
       {/* Header */}
-      <header className="px-5 py-5 bg-white border-b border-[#D1D1D6]/30 sticky top-0 z-40">
+      <header className="px-5 py-4 bg-white/60 backdrop-blur-xl border-b border-white/40 sticky top-0 z-40 transition-all">
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-3">
-            <h1 className="text-[20px] font-bold text-[#1C1C1E] tracking-tight">Yan R.X</h1>
+            <div className="w-12 h-12 bg-white rounded-2xl flex items-center justify-center shadow-lg shadow-brand/10 overflow-hidden border border-brand/10">
+              <img 
+                src="https://storage.googleapis.com/bit-academy-static-assets/bi-bi-logo.png" 
+                alt="Bi Bi Logo" 
+                className="w-full h-full object-cover"
+                referrerPolicy="no-referrer"
+                onError={(e) => {
+                  (e.target as HTMLImageElement).src = 'https://api.dicebear.com/7.x/bottts/svg?seed=BiBi';
+                }}
+              />
+            </div>
+            <div>
+              <h1 className="text-[18px] font-black text-black tracking-tight leading-none">Bi Bi</h1>
+              <span className="text-[10px] uppercase tracking-[0.2em] font-bold text-brand">Digital Store</span>
+            </div>
+          </div>
+          
+          <div className="flex items-center gap-2">
             <button 
               onClick={() => {
                 WebApp.openTelegramLink('https://t.me/yanrx4');
-                if (WebApp.HapticFeedback && typeof WebApp.HapticFeedback.impactOccurred === 'function') {
-                  try {
-                    WebApp.HapticFeedback.impactOccurred('light');
-                  } catch (e) {}
-                }
+                WebApp.HapticFeedback?.impactOccurred('light');
               }}
-              className="p-2 text-[#007AFF] hover:bg-[#007AFF]/5 rounded-xl transition-all"
-              title="Contact Support (@yanrx4)"
+              className="p-2.5 glass-button rounded-xl text-brand"
+              title="Support"
             >
               <MessageCircle className="w-5 h-5" />
             </button>
             <button 
               onClick={() => {
                 setShowAdmin(true);
-                if (WebApp.HapticFeedback && typeof WebApp.HapticFeedback.impactOccurred === 'function') {
-                  try {
-                    WebApp.HapticFeedback.impactOccurred('medium');
-                  } catch (e) {}
-                }
+                WebApp.HapticFeedback?.impactOccurred('medium');
               }}
-              className="p-2 text-[#8E8E93] hover:text-[#007AFF] hover:bg-[#007AFF]/5 rounded-xl transition-all"
-              title="Admin Panel"
+              className="p-2.5 glass-button rounded-xl text-[#8E8E93] hover:text-brand"
+              title="Admin"
             >
               <Shield className="w-5 h-5" />
             </button>
           </div>
-          <div className="w-10 h-10 rounded-full bg-[#E5E5EA] flex items-center justify-center border-2 border-white shadow-sm overflow-hidden">
-            <Sparkles className="w-5 h-5 text-[#8E8E93]" />
-          </div>
         </div>
       </header>
 
+      {/* Hero Section */}
+      <section className="px-6 pt-8 pb-4 relative overflow-hidden">
+        <motion.div
+          initial={{ opacity: 0, scale: 0.95 }}
+          animate={{ opacity: 1, scale: 1 }}
+          transition={{ duration: 0.8, ease: "easeOut" }}
+          className="relative z-10"
+        >
+          <div className="flex items-center gap-2 bg-white/50 backdrop-blur-md w-fit px-3 py-1.5 rounded-full border border-white/80 mb-6 group cursor-pointer active:scale-95 transition-all">
+            <Sparkles className="w-3.5 h-3.5 text-orange-400" />
+            <span className="text-[10px] font-black uppercase tracking-widest text-black/60">New Services Just Landed</span>
+            <ChevronDown className="w-3 h-3 text-brand" />
+          </div>
+          <h2 className="text-[42px] font-black text-black leading-[0.92] tracking-tighter mb-4">
+            Level Up Your <br/>
+            <span className="text-brand">Digital Life.</span>
+          </h2>
+          <p className="text-[#8E8E93] text-[15px] max-w-[280px] font-medium leading-relaxed">
+            Premium tools, subscriptions, and accounts delivered instantly to your inbox.
+          </p>
+        </motion.div>
+        
+        {/* Abstract shapes for fancy look */}
+        <div className="absolute top-10 right-[-20px] w-40 h-40 bg-[#007AFF]/10 rounded-full blur-3xl animate-float" />
+      </section>
+
       {/* Main Content */}
-      <main className="px-4 pt-6">
-        {/* Search Bar */}
-        <div className="mb-6 space-y-4">
+      <main className="px-4 mt-4">
+        {/* Search & Filters */}
+        <div className="mb-8 space-y-4">
           <div className="relative group">
-            <Search className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-[#8E8E93] group-focus-within:text-[#007AFF] transition-colors" />
+            <Search className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-[#8E8E93] group-focus-within:text-brand transition-colors" />
             <input 
               type="text"
-              placeholder="Search products..."
+              placeholder="Search premium plans..."
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
-              className="w-full pl-12 pr-4 py-3 bg-white border border-[#D1D1D6]/30 rounded-2xl text-[16px] focus:outline-none focus:ring-2 focus:ring-[#007AFF]/20 focus:border-[#007AFF] transition-all"
+              className="w-full pl-12 pr-4 py-4 glass-card rounded-[24px] text-[16px] font-medium focus:outline-none focus:ring-4 focus:ring-brand/10 transition-all"
             />
-            {searchQuery && (
-              <button 
-                onClick={() => setSearchQuery('')}
-                className="absolute right-4 top-1/2 -translate-y-1/2 p-1 hover:bg-[#8E8E93]/10 rounded-full"
-              >
-                <X className="w-4 h-4 text-[#8E8E93]" />
-              </button>
-            )}
           </div>
 
-          <div className="flex items-center gap-3 overflow-x-auto pb-1 no-scrollbar">
+          <div className="flex items-center gap-2 overflow-x-auto pb-2 no-scrollbar px-1">
             <button 
               onClick={() => setSelectedCategory(null)}
               className={cn(
-                "px-4 py-2 rounded-full text-sm font-semibold transition-all shrink-0",
+                "px-5 py-2.5 rounded-2xl text-xs font-bold uppercase tracking-wider transition-all shrink-0",
                 !selectedCategory 
-                  ? "bg-[#007AFF] text-white shadow-md shadow-[#007AFF]/20" 
-                  : "bg-white text-[#8E8E93] border border-[#D1D1D6]/30 hover:border-[#007AFF]/30"
+                  ? "bg-black text-white shadow-xl shadow-black/10" 
+                  : "glass-card text-[#8E8E93] hover:text-[#007AFF]"
               )}
             >
-              All
+              All Plans
             </button>
             {categories.map(category => (
               <button 
                 key={category}
                 onClick={() => setSelectedCategory(category)}
                 className={cn(
-                  "px-4 py-2 rounded-full text-sm font-semibold transition-all shrink-0",
+                  "px-5 py-2.5 rounded-2xl text-xs font-bold uppercase tracking-wider transition-all shrink-0",
                   selectedCategory === category
-                    ? "bg-[#007AFF] text-white shadow-md shadow-[#007AFF]/20" 
-                    : "bg-white text-[#8E8E93] border border-[#D1D1D6]/30 hover:border-[#007AFF]/30"
+                    ? "bg-black text-white shadow-xl shadow-black/10" 
+                    : "glass-card text-[#8E8E93] hover:text-[#007AFF]"
                 )}
               >
                 {category}
@@ -248,15 +339,15 @@ export default function App() {
             <button 
               onClick={() => setShowFilters(!showFilters)}
               className={cn(
-                "p-2 rounded-full transition-all ml-auto",
-                showFilters ? "bg-[#007AFF] text-white" : "bg-white text-[#8E8E93] border border-[#D1D1D6]/30"
+                "p-2.5 rounded-2xl transition-all ml-auto",
+                showFilters ? "bg-brand text-white" : "glass-card text-[#8E8E93]"
               )}
             >
               <SlidersHorizontal className="w-5 h-5" />
             </button>
           </div>
 
-          {/* Price Range Filter */}
+          {/* Price Range */}
           <AnimatePresence>
             {showFilters && (
               <motion.div
@@ -265,40 +356,28 @@ export default function App() {
                 exit={{ height: 0, opacity: 0 }}
                 className="overflow-hidden"
               >
-                <div className="bg-white rounded-2xl p-5 border border-[#D1D1D6]/30 shadow-sm mt-2">
-                  <div className="flex items-center justify-between mb-4">
-                    <p className="text-sm font-bold text-[#1C1C1E]">Price Range</p>
-                    <p className="text-xs font-semibold text-[#007AFF] bg-[#007AFF]/5 px-2 py-1 rounded-lg">
-                      ${priceRange.min} — ${priceRange.max}
+                <div className="glass-card rounded-[24px] p-6 shadow-2xl mt-2 border border-white/60">
+                  <div className="flex items-center justify-between mb-8">
+                    <div>
+                      <p className="text-sm font-black text-[#1C1C1E] mb-1">Max Budget</p>
+                      <p className="text-[10px] uppercase font-bold tracking-widest text-[#8E8E93]">Slide to adjust</p>
+                    </div>
+                    <p className="text-[15px] font-black text-brand bg-brand/10 px-4 py-2 rounded-2xl">
+                      {priceRange.max >= 50000 ? 'No Limit' : '$' + priceRange.max}
                     </p>
                   </div>
-                  <div className="space-y-6 px-1">
-                    <div className="flex items-center gap-4">
-                      <div className="flex-1 space-y-2">
-                        <label className="text-[11px] font-bold text-[#8E8E93] uppercase">Min Price</label>
-                        <input 
-                          type="range"
-                          min="0"
-                          max="500"
-                          step="5"
-                          value={priceRange.min}
-                          onChange={(e) => setPriceRange(prev => ({ ...prev, min: Number(e.target.value) }))}
-                          className="w-full accent-[#007AFF]"
-                        />
-                      </div>
-                      <div className="flex-1 space-y-2">
-                        <label className="text-[11px] font-bold text-[#8E8E93] uppercase">Max Price</label>
-                        <input 
-                          type="range"
-                          min="0"
-                          max="1000"
-                          step="10"
-                          value={priceRange.max}
-                          onChange={(e) => setPriceRange(prev => ({ ...prev, max: Number(e.target.value) }))}
-                          className="w-full accent-[#007AFF]"
-                        />
-                      </div>
-                    </div>
+                  <input 
+                    type="range"
+                    min="0"
+                    max="50000"
+                    step="100"
+                    value={priceRange.max}
+                    onChange={(e) => setPriceRange(prev => ({ ...prev, max: Number(e.target.value) || 0 }))}
+                    className="w-full accent-brand mb-2"
+                  />
+                  <div className="flex justify-between text-[10px] font-bold text-[#8E8E93] uppercase tracking-widest mt-1">
+                    <span>Low Range</span>
+                    <span>High Range</span>
                   </div>
                 </div>
               </motion.div>
@@ -306,47 +385,87 @@ export default function App() {
           </AnimatePresence>
         </div>
 
-        <div className="mb-4 px-1 flex items-center justify-between">
-          <p className="text-[12px] font-semibold text-[#8E8E93] uppercase tracking-wider">
-            {filteredProducts.length} {filteredProducts.length === 1 ? 'Service' : 'Services'} Found
-          </p>
-        </div>
-        
-        <div className="grid grid-cols-1">
-          {filteredProducts.length > 0 ? (
-            filteredProducts.map((product) => (
-              <ProductCard
-                key={product.id}
-                product={product}
-                onOrder={(p, v) => {
-                  setSelectedOrder({ product: p, variant: v });
-                  if (WebApp.HapticFeedback && typeof WebApp.HapticFeedback.impactOccurred === 'function') {
-                    try {
-                      WebApp.HapticFeedback.impactOccurred('light');
-                    } catch (e) {}
-                  }
-                }}
-              />
-            ))
-          ) : (
-            <div className="py-20 text-center">
-              <div className="w-16 h-16 bg-white rounded-3xl flex items-center justify-center border border-[#D1D1D6]/30 mx-auto mb-4">
-                <Search className="w-8 h-8 text-[#8E8E93]" />
+        {/* Featured Item (Bento Grid Style) */}
+        {!searchQuery && !selectedCategory && filteredProducts.length > 0 && products[0] && (
+          <div className="mb-8">
+            <h3 className="text-[12px] font-bold text-[#8E8E93] uppercase tracking-[0.2em] mb-3 px-1">
+              Store Highlight
+            </h3>
+            <ProductCard
+              product={products[0]}
+              onOrder={(p, v) => {
+                setSelectedOrder({ product: p, variant: v });
+                WebApp.HapticFeedback?.impactOccurred('light');
+              }}
+            />
+          </div>
+        )}
+
+        {/* Explorer Grid */}
+        <div className="space-y-2 mb-6">
+          <div className="flex items-center justify-between px-1 mb-4">
+            <h3 className="text-[12px] font-bold text-[#8E8E93] uppercase tracking-[0.2em]">
+              Explorer
+            </h3>
+            <button onClick={() => fetchProducts(false)} className="text-brand text-[11px] font-black flex items-center gap-1.5 active:scale-95 transition-all">
+              <RefreshCw className={cn("w-3.5 h-3.5", refreshing && "animate-spin")} />
+              Sync
+            </button>
+          </div>
+          
+          <div className="grid grid-cols-1 gap-2">
+            {products.length === 0 && !loading && !refreshing ? (
+              <div className="col-span-full py-20 text-center px-6 glass-card rounded-[2.5rem] border border-white/60 shadow-2xl">
+                <div className="w-24 h-24 bg-[#F2F2F7] rounded-[2rem] flex items-center justify-center mx-auto mb-6 active:scale-90 transition-transform cursor-pointer">
+                  <AlertCircle className="w-12 h-12 text-blue-400" />
+                </div>
+                <h3 className="text-2xl font-black mb-2 tracking-tight">Empty Vault</h3>
+                <p className="text-gray-500 text-sm mb-10 leading-relaxed max-w-[240px] mx-auto font-medium">
+                  We're currently refilling our digital stock. Check back in a few minutes.
+                </p>
+                <button 
+                  onClick={() => setShowAdmin(true)}
+                  className="w-full py-5 bg-brand text-white rounded-2xl font-black shadow-xl shadow-brand/20 active:scale-95 transition-all"
+                >
+                  Configure Store
+                </button>
               </div>
-              <p className="text-[#1C1C1E] font-bold">No products found</p>
-              <p className="text-[#8E8E93] text-sm mt-1">Try adjusting your filters or search terms</p>
-              <button 
-                onClick={() => {
-                  setSearchQuery('');
-                  setSelectedCategory(null);
-                  setPriceRange({ min: 0, max: 1000 });
-                }}
-                className="mt-6 text-[#007AFF] font-bold text-sm hover:underline transition-all"
-              >
-                Clear all filters
-              </button>
-            </div>
-          )}
+            ) : filteredProducts.length > 0 ? (
+              // If we showed the highlight, skip it in the list to avoid duplication
+              filteredProducts
+                .filter(p => !(!searchQuery && !selectedCategory && p.id === products[0]?.id))
+                .map((product) => (
+                <ProductCard
+                  key={product.id}
+                  product={product}
+                  onOrder={(p, v) => {
+                    setSelectedOrder({ product: p, variant: v });
+                    WebApp.HapticFeedback?.impactOccurred('light');
+                  }}
+                />
+              ))
+            ) : !loading && !refreshing && (
+              <div className="col-span-full py-20 text-center px-6 glass-card rounded-[2.5rem] border border-white/60 shadow-2xl">
+                <div className="w-16 h-16 glass-button rounded-full flex items-center justify-center mx-auto mb-4">
+                  <Search className="w-6 h-6 text-[#8E8E93]" />
+                </div>
+                <h3 className="text-[#1C1C1E] font-bold text-lg tracking-tight">No results matched</h3>
+                <p className="text-[#8E8E93] text-sm mt-2 mb-8 font-medium">
+                  Try adjusting filters or using different keywords.
+                </p>
+                <button 
+                  onClick={() => {
+                    setSearchQuery('');
+                    setSelectedCategory(null);
+                    setPriceRange({ min: 0, max: 100000 });
+                  }}
+                  className="px-8 py-4 bg-black text-white rounded-2xl font-bold shadow-2xl active:scale-95 transition-all"
+                >
+                  Clear All Filters
+                </button>
+              </div>
+            )}
+          </div>
         </div>
       </main>
 
@@ -356,8 +475,14 @@ export default function App() {
           <AdminPanel 
             onClose={() => {
               setShowAdmin(false);
-              fetchProducts(); // Refresh products after admin might have changed them
+              setSearchQuery('');
+              setSelectedCategory(null);
+              setPriceRange({ min: 0, max: 100000 });
+              fetchProducts(); 
             }} 
+            onProductsUpdated={() => {
+              fetchProducts();
+            }}
           />
         )}
         
@@ -402,7 +527,7 @@ export default function App() {
 
       <footer className="mt-8 text-center px-6">
         <p className="text-xs text-gray-400 font-medium">
-          © 2024 TeleStore Digital. Secure transactions guaranteed.
+          © 2024 Bi Bi Digital Store. Secure transactions guaranteed.
         </p>
       </footer>
     </div>

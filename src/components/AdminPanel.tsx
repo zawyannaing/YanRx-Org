@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { supabase } from '../lib/supabase';
 import { Product } from '../types';
 import { ProductForm } from './ProductForm';
-import { Plus, Edit2, Trash2, LogOut, Package, RefreshCw, AlertCircle, LayoutGrid, Image as ImageIcon, ClipboardList, Bot, CheckCircle2, XCircle, Clock, Shield } from 'lucide-react';
+import { Plus, Edit2, Trash2, LogOut, Package, RefreshCw, AlertCircle, LayoutGrid, Image as ImageIcon, ClipboardList, Bot, CheckCircle2, XCircle, Clock, Shield, Search, Eye } from 'lucide-react';
 import axios from 'axios';
 
 const ADMIN_EMAIL = import.meta.env.VITE_ADMIN_EMAIL;
@@ -14,15 +14,18 @@ interface Order {
   price: string;
   user_name: string;
   user_username: string;
+  payment_method: string;
+  transaction_id: string;
   status: 'pending' | 'completed' | 'cancelled';
   created_at: string;
 }
 
 interface AdminPanelProps {
   onClose: () => void;
+  onProductsUpdated?: () => void;
 }
 
-export const AdminPanel: React.FC<AdminPanelProps> = ({ onClose }) => {
+export const AdminPanel: React.FC<AdminPanelProps> = ({ onClose, onProductsUpdated }) => {
   const [isLoggedIn, setIsLoggedIn] = useState(false);
   const [emailInput, setEmailInput] = useState('');
   const [products, setProducts] = useState<Product[]>([]);
@@ -76,6 +79,8 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onClose }) => {
           price: variant ? `${variant.price} ${variant.currency || 'USD'}` : 'N/A',
           user_name: userInfo.name || 'Anonymous',
           user_username: userInfo.username || '',
+          payment_method: order.payment_method || order.paymentMethod || 'N/A',
+          transaction_id: order.transaction_id || order.transactionId || 'N/A',
           status: order.status || 'pending',
           created_at: order.created_at
         };
@@ -163,22 +168,54 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onClose }) => {
       setIsLoading(false);
     }
   };
+
+  const handleDeleteOrder = async (id: string) => {
+    if (!confirm('Are you sure you want to delete this order record?')) return;
+    
+    setIsLoading(true);
+    try {
+      if (!supabase) throw new Error('Supabase client not initialized');
+      
+      const { error } = await supabase
+        .from('orders')
+        .delete()
+        .eq('id', id);
+        
+      if (error) throw error;
+      
+      await fetchData();
+      alert('Order record deleted.');
+    } catch (err: any) {
+      alert('Error deleting order: ' + err.message);
+    } finally {
+      setIsLoading(false);
+    }
+  };
   const fetchProducts = async (): Promise<Product[] | undefined> => {
+    setError(null);
     try {
       if (!supabase) {
-        return undefined; // Silent fall-through, we know it's missing config
+        return undefined;
       }
 
-      const { data, error } = await supabase
+      console.log('Admin: Fetching products...');
+      const { data, error, status } = await supabase
         .from('products')
         .select('*')
         .order('created_at', { ascending: false });
 
-      if (error) throw error;
+      if (error) {
+        console.error('Fetch error:', error);
+        if (status === 404 || error.message.includes('not found') || error.message.includes('does not exist')) {
+          throw new Error('Database table "products" is missing. Please go to Setup and run the SQL query.');
+        }
+        throw error;
+      }
+      
       setProducts(data || []);
       return data || [];
     } catch (err: any) {
-      console.error('Fetch error:', err);
+      console.error('Fetch operation failed:', err);
       if (err.status === 401 || err.code === '401' || (err.message && err.message.includes('401'))) {
         setError('Unauthorized (401). Your Supabase API Key is invalid. Please check VITE_SUPABASE_ANON_KEY in Settings.');
       } else {
@@ -203,43 +240,49 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onClose }) => {
         throw new Error('At least one price variant is required');
       }
 
+      console.log(`Admin: ${id ? 'Updating' : 'Inserting'} product...`, cleanData);
+
       if (id) {
         // UPDATE existing product
-        console.log('Sending Update Request:', { id, cleanData });
         const { error, status, statusText } = await supabase
           .from('products')
           .update(cleanData)
-          .eq('id', id);
+          .eq('id', id)
+          .select();
         
         if (error) {
           console.error('Supabase Update Error:', error);
-          const is401 = status === 401 || error.message?.includes('401');
-          throw new Error(is401 
-            ? 'Unauthorized (401). Your Supabase API Key is invalid. Please check VITE_SUPABASE_ANON_KEY in Settings.' 
-            : `Update failed (${status}): ${error.message || statusText}`);
+          throw new Error(`Update failed (${status}): ${error.message || statusText}. Please ensure the "products" table exists with correct RLS policies.`);
         }
+        console.log('Update Success:', status);
       } else {
         // INSERT new product
-        console.log('Sending Insert Request:', cleanData);
         const { error, status, statusText } = await supabase
           .from('products')
-          .insert([cleanData]);
+          .insert([cleanData])
+          .select();
         
         if (error) {
           console.error('Supabase Insert Error:', error);
-          const is401 = status === 401 || error.message?.includes('401');
-          throw new Error(is401 
-            ? 'Unauthorized (401). Your Supabase API Key is invalid. Please check VITE_SUPABASE_ANON_KEY in Settings.' 
-            : `Insert failed (${status}): ${error.message || statusText}`);
+          throw new Error(`Insert failed (${status}): ${error.message || statusText}. Please ensure the "products" table exists with correct RLS policies.`);
         }
+        console.log('Insert Success:', status);
       }
       
       setIsAddingProduct(false);
       setEditingProduct(null);
-      await fetchProducts();
-      alert('Product saved successfully!');
+      
+      // Refresh products list
+      const updatedProducts = await fetchProducts();
+      if (onProductsUpdated) onProductsUpdated(); // Notify parent App
+      
+      if (updatedProducts) {
+        alert('Product saved successfully!');
+      } else {
+        alert('Product was saved to database, but could not be refreshed in UI. Try refreshing the page.');
+      }
     } catch (err: any) {
-      console.error('Operation Error Detail:', err);
+      console.error('Operation Error:', err);
       alert(err.message || 'An unexpected error occurred while saving.');
     }
   };
@@ -252,7 +295,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onClose }) => {
       if (!supabase) throw new Error('Supabase client not initialized');
       
       console.log('Sending Delete Request for ID:', id);
-      const { error, status, statusText } = await supabase
+      const { error, status } = await supabase
         .from('products')
         .delete()
         .eq('id', id);
@@ -261,15 +304,23 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onClose }) => {
         console.error('Supabase Delete Error:', error);
         throw error;
       }
+
+      // Supabase return status 204 or 200 on success. 
+      // If RLS blocks it without "error" (sometimes happens with DELETE), we check if still exists
+      console.log('Delete status:', status);
       
       await fetchProducts();
       alert('Product deleted successfully.');
     } catch (err: any) {
       console.error('Delete Error Detail:', err);
       let msg = err.message || 'Could not delete product.';
-      if (msg.includes('foreign key constraint')) {
-        msg = 'Could not delete product because it has associated orders. You must delete the orders first, or update the database schema to use "ON DELETE CASCADE".';
+      
+      if (err.code === '42501' || msg.includes('permission denied')) {
+        msg = 'Permission Denied! Please go to the "Setup" tab and run the SQL query to enable delete permissions for products.';
+      } else if (msg.includes('foreign key constraint')) {
+        msg = 'Could not delete product because it has associated orders in the orders table. Please delete the orders first.';
       }
+      
       alert(msg);
     } finally {
       setIsLoading(false);
@@ -280,8 +331,8 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onClose }) => {
     return (
       <div className="fixed inset-0 bg-white z-[60] flex items-center justify-center p-6 animate-in slide-in-from-bottom duration-300">
         <div className="w-full max-w-sm space-y-8 text-center">
-          <div className="mx-auto w-20 h-20 bg-[#007AFF]/10 rounded-3xl flex items-center justify-center">
-            <LayoutGrid className="w-10 h-10 text-[#007AFF]" />
+          <div className="mx-auto w-20 h-20 bg-brand/10 rounded-3xl flex items-center justify-center">
+            <LayoutGrid className="w-10 h-10 text-brand" />
           </div>
           <div>
             <h1 className="text-2xl font-bold text-gray-900">Admin Login</h1>
@@ -297,7 +348,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onClose }) => {
                 value={emailInput}
                 onChange={(e) => setEmailInput(e.target.value)}
                 placeholder="admin@example.com"
-                className="w-full px-4 py-4 bg-gray-50 border border-transparent rounded-2xl focus:bg-white focus:border-[#007AFF] outline-none transition-all placeholder:text-gray-300"
+                className="w-full px-4 py-4 bg-gray-50 border border-transparent rounded-2xl focus:bg-white focus:border-brand outline-none transition-all placeholder:text-gray-300"
               />
             </div>
                   {error && (
@@ -406,7 +457,7 @@ CREATE POLICY "Admin Update" ON orders FOR UPDATE USING (true);`}
             )}
             <button
               type="submit"
-              className="w-full py-4 text-[16px] font-bold text-white bg-[#007AFF] rounded-2xl active:scale-[0.98] transition-all shadow-lg shadow-[#007AFF]/20"
+              className="w-full py-4 text-[16px] font-bold text-white bg-brand rounded-2xl active:scale-[0.98] transition-all shadow-lg shadow-brand/20"
             >
               Sign In
             </button>
@@ -427,7 +478,7 @@ CREATE POLICY "Admin Update" ON orders FOR UPDATE USING (true);`}
     <div className="fixed inset-0 bg-[#F2F2F7] z-[60] flex flex-col animate-in slide-in-from-bottom duration-300 overflow-hidden">
       <header className="bg-white border-b border-gray-200 px-6 py-4 flex items-center justify-between sticky top-0 z-10">
         <div className="flex items-center gap-3">
-          <div className="w-10 h-10 bg-[#007AFF] rounded-xl flex items-center justify-center">
+          <div className="w-10 h-10 bg-brand rounded-xl flex items-center justify-center">
             <Package className="w-6 h-6 text-white" />
           </div>
           <div>
@@ -458,19 +509,34 @@ CREATE POLICY "Admin Update" ON orders FOR UPDATE USING (true);`}
         {/* Tabs and Bot Config */}
         <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
           <div className="flex bg-white p-1.5 rounded-2xl border border-gray-200 w-fit">
-            <button
+            <div
+              role="button"
+              tabIndex={0}
               onClick={() => setActiveTab('products')}
-              className={`flex items-center gap-2 px-6 py-2.5 rounded-xl font-bold transition-all ${
-                activeTab === 'products' ? 'bg-[#007AFF] text-white shadow-lg shadow-[#007AFF]/20' : 'text-gray-500 hover:text-gray-900'
+              onKeyDown={(e) => e.key === 'Enter' && setActiveTab('products')}
+              className={`flex items-center gap-2 px-6 py-2.5 rounded-xl font-bold transition-all cursor-pointer ${
+                activeTab === 'products' ? 'bg-brand text-white shadow-lg shadow-brand/20' : 'text-gray-500 hover:text-gray-900'
               }`}
             >
               <LayoutGrid className="w-5 h-5" />
               Products
-            </button>
-            <button
+              {activeTab === 'products' && (
+                <button 
+                  onClick={(e) => { e.stopPropagation(); fetchProducts(); }}
+                  className="ml-2 p-1 hover:bg-white/20 rounded-lg"
+                  title="Refresh List"
+                >
+                  <RefreshCw className={`w-3.5 h-3.5 ${isLoading ? 'animate-spin' : ''}`} />
+                </button>
+              )}
+            </div>
+            <div
+              role="button"
+              tabIndex={0}
               onClick={() => setActiveTab('orders')}
-              className={`flex items-center gap-2 px-6 py-2.5 rounded-xl font-bold transition-all ${
-                activeTab === 'orders' ? 'bg-[#007AFF] text-white shadow-lg shadow-[#007AFF]/20' : 'text-gray-500 hover:text-gray-900'
+              onKeyDown={(e) => e.key === 'Enter' && setActiveTab('orders')}
+              className={`flex items-center gap-2 px-6 py-2.5 rounded-xl font-bold transition-all cursor-pointer ${
+                activeTab === 'orders' ? 'bg-brand text-white shadow-lg shadow-brand/20' : 'text-gray-500 hover:text-gray-900'
               }`}
             >
               <ClipboardList className="w-5 h-5" />
@@ -480,16 +546,19 @@ CREATE POLICY "Admin Update" ON orders FOR UPDATE USING (true);`}
                   {orders.filter(o => o.status === 'pending').length}
                 </span>
               )}
-            </button>
-            <button
+            </div>
+            <div
+              role="button"
+              tabIndex={0}
               onClick={() => setActiveTab('setup')}
-              className={`flex items-center gap-2 px-6 py-2.5 rounded-xl font-bold transition-all ${
-                activeTab === 'setup' ? 'bg-[#007AFF] text-white shadow-lg shadow-[#007AFF]/20' : 'text-gray-500 hover:text-gray-900'
+              onKeyDown={(e) => e.key === 'Enter' && setActiveTab('setup')}
+              className={`flex items-center gap-2 px-6 py-2.5 rounded-xl font-bold transition-all cursor-pointer ${
+                activeTab === 'setup' ? 'bg-brand text-white shadow-lg shadow-brand/20' : 'text-gray-500 hover:text-gray-900'
               }`}
             >
               <Shield className="w-5 h-5" />
               Setup
-            </button>
+            </div>
           </div>
 
           <div className="flex flex-wrap items-center gap-2">
@@ -499,11 +568,11 @@ CREATE POLICY "Admin Update" ON orders FOR UPDATE USING (true);`}
               className={`flex items-center gap-2 px-4 py-2.5 rounded-2xl font-bold transition-all ${
                 testStatus.error ? 'bg-red-50 text-red-600 border border-red-100' : 
                 testStatus.success ? 'bg-green-50 text-green-600 border border-green-100' :
-                'bg-white text-[#007AFF] border border-[#007AFF]/20 hover:bg-[#007AFF]/5'
+                'bg-white text-brand border border-brand/20 hover:bg-brand/5'
               }`}
             >
               {testStatus.loading ? <RefreshCw className="w-4 h-4 animate-spin" /> : testStatus.success ? <CheckCircle2 className="w-4 h-4" /> : <Bot className="w-4 h-4" />}
-              {testStatus.error ? 'Test Failed' : testStatus.success ? 'Test Sent!' : 'Test Telegram Buttons'}
+              {testStatus.error ? 'Test Failed' : testStatus.success ? 'Test Sent!' : 'Test Telegram Notify'}
             </button>
 
             <button
@@ -522,7 +591,7 @@ CREATE POLICY "Admin Update" ON orders FOR UPDATE USING (true);`}
             {activeTab === 'products' && (
               <button
                 onClick={() => setIsAddingProduct(true)}
-                className="flex items-center justify-center gap-2 px-6 py-2.5 bg-[#007AFF] text-white font-bold rounded-2xl hover:bg-[#007AFF]/90 active:scale-[0.98] transition-all shadow-lg shadow-[#007AFF]/20"
+                className="flex items-center justify-center gap-2 px-6 py-2.5 bg-brand text-white font-bold rounded-2xl hover:bg-brand/90 active:scale-[0.98] transition-all shadow-lg shadow-brand/20"
               >
                 <Plus className="w-5 h-5" />
                 Add Product
@@ -596,7 +665,7 @@ CREATE POLICY "Admin Update" ON orders FOR UPDATE USING (true);`}
                   1. Connect Telegram Bot
                 </p>
                 <div className="space-y-3">
-                  <p className="text-xs">To receive orders and use confirmation buttons in Telegram:</p>
+                  <p className="text-xs">To receive notifications about new orders in Telegram:</p>
                   <ol className="text-[11px] list-decimal ml-4 space-y-1 opacity-80">
                     <li>Create a bot via <b>@BotFather</b> and get the <b>Token</b>.</li>
                     <li>Add <b>TELEGRAM_BOT_TOKEN</b>, <b>TELEGRAM_ADMIN_ID</b>, and <b>SUPABASE_SERVICE_ROLE_KEY</b> to AI Studio <b>Settings</b>.</li>
@@ -631,30 +700,59 @@ CREATE POLICY "Admin Update" ON orders FOR UPDATE USING (true);`}
               </div>
 
               <div className="p-4 bg-indigo-50 text-indigo-700 rounded-2xl border border-indigo-100">
-                <p className="font-bold mb-2 flex items-center gap-2">
-                  <span className="w-2 h-2 bg-indigo-500 rounded-full" />
-                  Database Repair (Missing Columns)
+                <p className="font-bold mb-2 flex items-center gap-2 text-indigo-800">
+                  <Shield className="w-5 h-5" />
+                  Deployment Note (Cloud Run Org Policy)
                 </p>
-                <p className="text-xs mb-3 italic">Run this if you get errors about incompatible types (text vs uuid) or missing columns.</p>
-                <pre className="bg-gray-900 text-gray-100 p-4 rounded-xl text-xs overflow-x-auto">
-{`-- 1. Fix missing product category
-ALTER TABLE products ADD COLUMN IF NOT EXISTS category TEXT;
+                <div className="text-xs space-y-2 opacity-90">
+                  <p>If you see a <b>"constraints/run.managed.requireInvokerIam"</b> error during deployment, it means your Google Cloud organization restricts public access to apps. </p>
+                  <p><b>Fix:</b> You must go to the Google Cloud Console for this project and enable "Allow unauthenticated" in the Cloud Run service settings, or contact your IT admin.</p>
+                </div>
+              </div>
 
--- 2. Fix data type mismatch (Convert TEXT to UUID)
-ALTER TABLE orders 
-ALTER COLUMN product_id TYPE UUID USING product_id::uuid;
+              <div className="p-4 bg-red-50 text-red-700 rounded-2xl border border-red-100">
+                <p className="font-bold mb-1 flex items-center gap-2">
+                  <span className="w-2 h-2 bg-red-500 rounded-full animate-pulse" />
+                  Database Repair (Fix "Column Missing" Errors)
+                </p>
+                <div className="text-[11px] mb-3 space-y-1 opacity-90">
+                  <p>If you get "Could not find column" errors, copy and run this in your <b>Supabase SQL Editor</b>:</p>
+                </div>
+                <pre className="bg-gray-900 text-gray-100 p-4 rounded-xl text-[10px] overflow-x-auto whitespace-pre-wrap select-all border border-red-200">
+{`-- FIX MISSING COLUMNS
+ALTER TABLE orders ADD COLUMN IF NOT EXISTS payment_method TEXT;
+ALTER TABLE orders ADD COLUMN IF NOT EXISTS transaction_id TEXT;
 
--- 3. Fix order relationships (Cascade Delete)
-ALTER TABLE orders DROP CONSTRAINT IF EXISTS orders_product_id_fkey;
-ALTER TABLE orders ADD CONSTRAINT orders_product_id_fkey 
-  FOREIGN KEY (product_id) REFERENCES products(id) ON DELETE CASCADE;`}
+-- REFRESH PERMISSIONS
+ALTER TABLE products ENABLE ROW LEVEL SECURITY;
+ALTER TABLE orders ENABLE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS "Public Read/Write Products" ON products;
+DROP POLICY IF EXISTS "Public Read/Write Orders" ON orders;
+
+CREATE POLICY "Public Read/Write Products" ON products FOR ALL USING (true) WITH CHECK (true);
+CREATE POLICY "Public Read/Write Orders" ON orders FOR ALL USING (true) WITH CHECK (true);
+
+GRANT ALL ON products TO anon, authenticated, postgres, service_role;
+GRANT ALL ON orders TO anon, authenticated, postgres, service_role;`}
                 </pre>
               </div>
 
               <div className="p-4 bg-gray-50 text-gray-700 rounded-2xl border border-gray-100">
-                <p className="font-bold mb-2">Complete Table Setup</p>
-                <pre className="bg-gray-900 text-gray-100 p-4 rounded-xl text-xs overflow-x-auto whitespace-pre-wrap">
-{`CREATE TABLE IF NOT EXISTS products (
+                <p className="font-bold mb-2 flex items-center gap-2">
+                   <Clock className="w-4 h-4" />
+                   Full Database Reset
+                </p>
+                <div className="text-[11px] mb-3 space-y-1 opacity-80">
+                  <p>Use this ONLY if you want to wipe all data and start fresh:</p>
+                </div>
+                <pre className="bg-gray-900 text-gray-100 p-4 rounded-xl text-[10px] overflow-x-auto whitespace-pre-wrap select-all border border-gray-200">
+{`-- 1. DELETE EVERYTHING
+DROP TABLE IF EXISTS orders CASCADE;
+DROP TABLE IF EXISTS products CASCADE;
+
+-- 2. CREATE PRODUCTS
+CREATE TABLE products (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   title TEXT NOT NULL,
   description TEXT,
@@ -664,27 +762,25 @@ ALTER TABLE orders ADD CONSTRAINT orders_product_id_fkey
   created_at TIMESTAMPTZ DEFAULT now()
 );
 
-ALTER TABLE products ENABLE ROW LEVEL SECURITY;
-CREATE POLICY "Public Read" ON products FOR SELECT USING (true);
-CREATE POLICY "Public Manage" ON products FOR ALL USING (true) WITH CHECK (true);
-
-CREATE TABLE IF NOT EXISTS orders (
+-- 3. CREATE ORDERS
+CREATE TABLE orders (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   product_id UUID REFERENCES products(id) ON DELETE CASCADE,
   variant_id TEXT NOT NULL,
   user_info JSONB NOT NULL,
+  payment_method TEXT,
+  transaction_id TEXT,
   status TEXT DEFAULT 'pending',
   created_at TIMESTAMPTZ DEFAULT now()
 );
 
--- If table exists but needs cascade delete:
--- ALTER TABLE orders DROP CONSTRAINT IF EXISTS orders_product_id_fkey;
--- ALTER TABLE orders ADD CONSTRAINT orders_product_id_fkey FOREIGN KEY (product_id) REFERENCES products(id) ON DELETE CASCADE;
-
+-- 4. PERMISSIONS
+ALTER TABLE products ENABLE ROW LEVEL SECURITY;
 ALTER TABLE orders ENABLE ROW LEVEL SECURITY;
-CREATE POLICY "Public Insert" ON orders FOR INSERT WITH CHECK (true);
-CREATE POLICY "Public Read" ON orders FOR SELECT USING (true);
-CREATE POLICY "Admin Update" ON orders FOR UPDATE USING (true) WITH CHECK (true);`}
+CREATE POLICY "Public Read/Write Products" ON products FOR ALL USING (true) WITH CHECK (true);
+CREATE POLICY "Public Read/Write Orders" ON orders FOR ALL USING (true) WITH CHECK (true);
+GRANT ALL ON products TO anon, authenticated, postgres, service_role;
+GRANT ALL ON orders TO anon, authenticated, postgres, service_role;`}
                 </pre>
               </div>
             </div>
@@ -707,6 +803,7 @@ CREATE POLICY "Admin Update" ON orders FOR UPDATE USING (true) WITH CHECK (true)
                     <tr className="bg-gray-50 border-b border-gray-100">
                       <th className="px-6 py-4 text-xs font-bold text-gray-500 uppercase tracking-wider">Order</th>
                       <th className="px-6 py-4 text-xs font-bold text-gray-500 uppercase tracking-wider">Customer</th>
+                      <th className="px-6 py-4 text-xs font-bold text-gray-500 uppercase tracking-wider">Payment</th>
                       <th className="px-6 py-4 text-xs font-bold text-gray-500 uppercase tracking-wider">Status</th>
                       <th className="px-6 py-4 text-xs font-bold text-gray-500 uppercase tracking-wider">Price</th>
                       <th className="px-6 py-4 text-xs font-bold text-gray-500 uppercase tracking-wider">Action</th>
@@ -724,7 +821,13 @@ CREATE POLICY "Admin Update" ON orders FOR UPDATE USING (true) WITH CHECK (true)
                         <td className="px-6 py-4">
                           <div className="flex flex-col">
                             <span className="font-medium text-gray-900 text-sm">{order.user_name}</span>
-                            <span className="text-xs text-[#007AFF]">@{order.user_username || 'N/A'}</span>
+                            <span className="text-xs text-brand/70 font-bold">@{order.user_username || 'N/A'}</span>
+                          </div>
+                        </td>
+                        <td className="px-6 py-4">
+                          <div className="flex flex-col">
+                            <span className="font-bold text-brand text-xs uppercase">{order.payment_method}</span>
+                            <span className="text-[10px] font-mono text-gray-400">ID: ...{order.transaction_id}</span>
                           </div>
                         </td>
                         <td className="px-6 py-4">
@@ -741,26 +844,33 @@ CREATE POLICY "Admin Update" ON orders FOR UPDATE USING (true) WITH CHECK (true)
                         </td>
                         <td className="px-6 py-4 font-bold text-gray-900 text-sm">{order.price}</td>
                         <td className="px-6 py-4">
-                          {order.status === 'pending' ? (
-                            <div className="flex items-center gap-2">
-                              <button 
-                                onClick={() => updateOrderStatus(order.id, 'completed')}
-                                className="p-2 bg-green-50 text-green-600 hover:bg-green-600 hover:text-white rounded-lg transition-all"
-                                title="Mark Completed"
-                              >
-                                <CheckCircle2 className="w-5 h-5" />
-                              </button>
-                              <button 
-                                onClick={() => updateOrderStatus(order.id, 'cancelled')}
-                                className="p-2 bg-red-50 text-red-600 hover:bg-red-600 hover:text-white rounded-lg transition-all"
-                                title="Decline Order"
-                              >
-                                <XCircle className="w-5 h-5" />
-                              </button>
-                            </div>
-                          ) : (
-                            <span className="text-[10px] text-gray-300 font-bold uppercase tracking-widest italic">Archived</span>
-                          )}
+                          <div className="flex items-center gap-2">
+                            {order.status === 'pending' && (
+                              <>
+                                <button 
+                                  onClick={() => updateOrderStatus(order.id, 'completed')}
+                                  className="p-2 bg-green-50 text-green-600 hover:bg-green-600 hover:text-white rounded-lg transition-all"
+                                  title="Mark Completed"
+                                >
+                                  <CheckCircle2 className="w-5 h-5" />
+                                </button>
+                                <button 
+                                  onClick={() => updateOrderStatus(order.id, 'cancelled')}
+                                  className="p-2 bg-red-50 text-red-600 hover:bg-red-600 hover:text-white rounded-lg transition-all"
+                                  title="Decline Order"
+                                >
+                                  <XCircle className="w-5 h-5" />
+                                </button>
+                              </>
+                            )}
+                            <button 
+                              onClick={() => handleDeleteOrder(order.id)}
+                              className="p-2 text-gray-400 hover:text-red-500 hover:bg-red-50 rounded-lg transition-all"
+                              title="Delete Permanently"
+                            >
+                              <Trash2 className="w-5 h-5" />
+                            </button>
+                          </div>
                         </td>
                       </tr>
                     ))}
@@ -775,7 +885,14 @@ CREATE POLICY "Admin Update" ON orders FOR UPDATE USING (true) WITH CHECK (true)
               <Package className="w-8 h-8 text-gray-300" />
             </div>
             <h3 className="text-lg font-bold text-gray-900">No products found</h3>
-            <p className="text-sm text-gray-500 mt-1 max-w-xs mx-auto">Your store is currently empty. Click "Add Product" to get started.</p>
+            <p className="text-sm text-gray-500 mt-1 mb-6 max-w-xs mx-auto">Your store is currently empty. Click the button below to add your first product.</p>
+            <button
+              onClick={() => setIsAddingProduct(true)}
+              className="inline-flex items-center justify-center gap-2 px-8 py-3 bg-[#007AFF] text-white font-bold rounded-2xl hover:bg-[#007AFF]/90 active:scale-[0.98] transition-all shadow-lg shadow-[#007AFF]/20"
+            >
+              <Plus className="w-5 h-5" />
+              Add First Product
+            </button>
           </div>
         ) : (
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -789,16 +906,18 @@ CREATE POLICY "Admin Update" ON orders FOR UPDATE USING (true) WITH CHECK (true)
                       <ImageIcon className="w-12 h-12" />
                     </div>
                   )}
-                  <div className="absolute top-4 right-4 flex gap-2 translate-y-2 opacity-0 group-hover:translate-y-0 group-hover:opacity-100 transition-all duration-300">
+                  <div className="absolute top-4 right-4 flex gap-2 z-10">
                     <button
                       onClick={() => setEditingProduct(product)}
-                      className="p-3 bg-white/90 backdrop-blur-sm text-[#007AFF] rounded-xl shadow-lg hover:bg-[#007AFF] hover:text-white transition-all active:scale-90"
+                      className="p-2.5 bg-white shadow-md text-[#007AFF] rounded-xl hover:bg-[#007AFF] hover:text-white transition-all active:scale-90 border border-gray-100"
+                      title="Edit Product"
                     >
                       <Edit2 className="w-5 h-5" />
                     </button>
                     <button
                       onClick={() => handleDeleteProduct(product.id)}
-                      className="p-3 bg-white/90 backdrop-blur-sm text-red-500 rounded-xl shadow-lg hover:bg-red-500 hover:text-white transition-all active:scale-90"
+                      className="p-2.5 bg-white shadow-md text-red-500 rounded-xl hover:bg-red-500 hover:text-white transition-all active:scale-90 border border-gray-100"
+                      title="Delete Product"
                     >
                       <Trash2 className="w-5 h-5" />
                     </button>
@@ -830,6 +949,20 @@ CREATE POLICY "Admin Update" ON orders FOR UPDATE USING (true) WITH CHECK (true)
               </div>
             ))}
           </div>
+        )}
+
+        {/* Floating Action Button for Add Product - only in Products Tab */}
+        {activeTab === 'products' && products.length > 0 && (
+          <button
+            onClick={() => setIsAddingProduct(true)}
+            className="fixed bottom-8 right-8 w-16 h-16 bg-[#007AFF] text-white rounded-full shadow-2xl flex items-center justify-center hover:scale-110 active:scale-95 transition-all z-20 group"
+            title="Add New Product"
+          >
+            <Plus className="w-8 h-8" />
+            <span className="absolute right-full mr-4 px-3 py-2 bg-gray-900 text-white text-xs font-bold rounded-lg opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap pointer-events-none">
+              Add New Product
+            </span>
+          </button>
         )}
       </main>
 
