@@ -458,3 +458,10 @@ Thank you for buying! Have a great day! ✨
 startServer().catch(err => {
   console.error('Failed to start server:', err);
 });
+
+app.get('/api/hello', (req, res) => {
+  res.json({ 
+    message: "Hello! Your API is working on Vercel.",
+    time: new Date().toISOString()
+  });
+});
