@@ -25,6 +25,8 @@ export default function App() {
   const [selectedCategory, setSelectedCategory] = useState<string | null>(null);
   const [showFilters, setShowFilters] = useState(false);
   const [priceRange, setPriceRange] = useState<{ min: number; max: number }>({ min: 0, max: 100000 });
+  const [userBalance, setUserBalance] = useState<number>(0);
+  const [isUpdatingBalance, setIsUpdatingBalance] = useState(false);
 
   const categories = Array.from(new Set(products.map(p => p.category).filter(Boolean))) as string[];
 
@@ -73,7 +75,48 @@ export default function App() {
     document.documentElement.style.setProperty('--tg-theme-button-text-color', WebApp.themeParams.button_text_color || '#ffffff');
 
     fetchProducts(true);
+    fetchUserBalance();
   }, []);
+
+  const fetchUserBalance = async () => {
+    const user = WebApp.initDataUnsafe.user;
+    if (user?.id) {
+      try {
+        const response = await axios.get(`/api/user/${user.id}`);
+        if (response.data) {
+          setUserBalance(response.data.balance || 0);
+        }
+      } catch (error) {
+        console.error('Error fetching balance:', error);
+      }
+    }
+  };
+
+  const updateBalance = async (amount: number) => {
+    const user = WebApp.initDataUnsafe.user;
+    if (!user?.id) {
+      WebApp.showAlert('Telegram user not found');
+      return;
+    }
+
+    setIsUpdatingBalance(true);
+    try {
+      const response = await axios.post('/api/update-balance', {
+        telegramId: user.id,
+        amount: amount
+      });
+
+      if (response.data.success) {
+        setUserBalance(response.data.balance);
+        WebApp.HapticFeedback.notificationOccurred('success');
+      }
+    } catch (error) {
+      console.error('Error updating balance:', error);
+      WebApp.showAlert('Failed to update balance');
+    } finally {
+      setIsUpdatingBalance(false);
+    }
+  };
 
   const fetchProducts = async (initial = false) => {
     if (initial) setLoading(true);
@@ -227,33 +270,23 @@ export default function App() {
       <header className="px-5 py-4 bg-white/60 backdrop-blur-xl border-b border-white/40 sticky top-0 z-40 transition-all">
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-3">
-            <div className="w-12 h-12 bg-white rounded-2xl flex items-center justify-center shadow-lg shadow-brand/10 overflow-hidden border border-brand/10">
-              <img 
-                src="https://storage.googleapis.com/bit-academy-static-assets/bi-bi-logo.png" 
-                alt="Bi Bi Logo" 
-                className="w-full h-full object-cover"
-                referrerPolicy="no-referrer"
-                onError={(e) => {
-                  (e.target as HTMLImageElement).src = 'https://api.dicebear.com/7.x/bottts/svg?seed=BiBi';
-                }}
-              />
-            </div>
-            <div>
-              <h1 className="text-[18px] font-black text-black tracking-tight leading-none">Bi Bi</h1>
-              <span className="text-[10px] uppercase tracking-[0.2em] font-bold text-brand">Digital Store</span>
+            <div className="bg-brand/5 p-2 px-3 rounded-2xl border border-brand/10">
+               <div className="flex items-center gap-2 mb-0.5">
+                 <div className="w-1.5 h-1.5 bg-brand rounded-full animate-pulse" />
+                 <p className="text-[9px] font-bold text-brand-dark uppercase tracking-widest">Balance</p>
+               </div>
+               <p className="text-xl font-black text-black tracking-tight leading-none">${userBalance.toFixed(2)}</p>
             </div>
           </div>
           
           <div className="flex items-center gap-2">
             <button 
-              onClick={() => {
-                WebApp.openTelegramLink('https://t.me/yanrx4');
-                WebApp.HapticFeedback?.impactOccurred('light');
-              }}
-              className="p-2.5 glass-button rounded-xl text-brand"
-              title="Support"
+              onClick={() => updateBalance(10)}
+              disabled={isUpdatingBalance}
+              className="p-2.5 glass-button rounded-xl text-brand active:scale-95 transition-all disabled:opacity-50"
+              title="Claim Bonus"
             >
-              <MessageCircle className="w-5 h-5" />
+              <RefreshCw className={cn("w-5 h-5", isUpdatingBalance && "animate-spin")} />
             </button>
             <button 
               onClick={() => {

@@ -17,6 +17,12 @@ const supabaseAdmin = createClient(
   process.env.SUPABASE_SERVICE_ROLE_KEY || ''
 );
 
+// Standard Supabase client (using anon key)
+const supabase = createClient(
+  process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL || '',
+  process.env.SUPABASE_ANON_KEY || process.env.VITE_SUPABASE_ANON_KEY || ''
+);
+
 const app = express();
 export default app;
 
@@ -179,151 +185,198 @@ Thank you for buying! Have a great day! ✨
 
   // Telegram Webhook Handler for Inline Buttons & Messages
   app.post('/api/telegram-webhook', async (req, res) => {
-    const { callback_query, message } = req.body;
-    
-    const token = process.env.TELEGRAM_BOT_TOKEN?.trim();
-    const adminId = process.env.TELEGRAM_ADMIN_ID?.trim();
+    // 1. Respond immediately to Telegram to avoid retries
+    res.sendStatus(200);
 
-    // 1. Handle incoming text messages (e.g. /start or /id)
-    if (message && message.text) {
-      const chatId = message.chat.id;
-      const text = message.text.toLowerCase();
+    // 2. Process logic in background-like manner (be careful in serverless)
+    const processUpdate = async () => {
+      try {
+        const { callback_query, message } = req.body;
+        const token = process.env.TELEGRAM_BOT_TOKEN?.trim();
+        const adminId = process.env.TELEGRAM_ADMIN_ID?.trim();
 
-      if (text === '/id' || text === '/start') {
-        const responseText = `👋 <b>Hello!</b>\n\nYour Telegram User ID is: <code>${chatId}</code>\n\n` + 
-                            (String(chatId) === String(adminId) 
-                              ? "✅ You are recognized as the <b>Admin</b>." 
-                              : "ℹ️ You are <b>not</b> yet configured as Admin in the app's Secrets.");
-        
-        await axios.post(`https://api.telegram.org/bot${token}/sendMessage`, {
-          chat_id: chatId,
-          text: responseText,
-          parse_mode: 'HTML'
-        }).catch(e => console.error('Error sending ID response:', e.message));
+        if (!token) return;
+
+        // Handle incoming text messages
+        if (message && message.text) {
+          const chatId = message.chat.id;
+          const text = message.text.toLowerCase();
+
+          if (text === '/id') {
+            const responseText = `👋 <b>Hello!</b>\n\nYour Telegram User ID is: <code>${chatId}</code>\n\n` + 
+                                (String(chatId) === String(adminId) 
+                                  ? "✅ You are recognized as the <b>Admin</b>." 
+                                  : "ℹ️ You are <b>not</b> yet configured as Admin in the app's Secrets.");
+            
+            await axios.post(`https://api.telegram.org/bot${token}/sendMessage`, {
+              chat_id: chatId,
+              text: responseText,
+              parse_mode: 'HTML'
+            }).catch(e => console.error('Error sending ID response:', e.message));
+          } else if (text === '/start') {
+            try {
+              const telegramId = message.from.id;
+              const firstName = message.from.first_name;
+              const username = message.from.username;
+
+              // Check if user exists
+              const { data: existingUser, error: checkError } = await supabase
+                .from('users')
+                .select('*')
+                .eq('telegram_id', telegramId)
+                .single();
+
+              if (checkError && checkError.code !== 'PGRST116') throw checkError;
+
+              const welcomeMessage = `🌟 <b>Welcome to Premium Store, ${firstName}!</b>\n\n` +
+                                    (existingUser 
+                                      ? `Welcome back! Your current balance is <b>$${existingUser.balance || 0}</b>.` 
+                                      : `Your account has been registered successfully.\n\nType <b>/id</b> to see your Telegram ID.`);
+
+              if (!existingUser) {
+                // Register new user
+                const { error: insertError } = await supabase
+                  .from('users')
+                  .insert({
+                    telegram_id: telegramId,
+                    first_name: firstName,
+                    username: username
+                  });
+
+                if (insertError) throw insertError;
+              }
+
+              await axios.post(`https://api.telegram.org/bot${token}/sendMessage`, {
+                chat_id: chatId,
+                text: welcomeMessage,
+                parse_mode: 'HTML'
+              });
+            } catch (error: any) {
+              console.error('Start command error:', error.message);
+              await axios.post(`https://api.telegram.org/bot${token}/sendMessage`, {
+                chat_id: chatId,
+                text: '❌ <b>An error occurred during registration.</b>',
+                parse_mode: 'HTML'
+              }).catch(() => {});
+            }
+          }
+          return;
+        }
+
+        // Handle callback queries
+        if (callback_query) {
+          const { data, message: cbMessage, from } = callback_query;
+
+          if (!adminId || String(from.id) !== String(adminId)) {
+            await axios.post(`https://api.telegram.org/bot${token}/answerCallbackQuery`, {
+              callback_query_id: callback_query.id,
+              text: '⚠️ Unauthorized.',
+              show_alert: true
+            });
+            return;
+          }
+
+          const [action, orderId] = data.split(':');
+          if (!orderId || orderId === 'unknown') return;
+
+          const newStatus = action === 'conf' ? 'completed' : 'cancelled';
+          const statusText = action === 'conf' ? '✅ COMPLETED' : '❌ DECLINED';
+
+          const { data: order, error: fetchError } = await supabaseAdmin
+            .from('orders')
+            .select('*')
+            .eq('id', orderId)
+            .single();
+
+          if (fetchError || !order) return;
+
+          await supabaseAdmin.from('orders').update({ status: newStatus }).eq('id', orderId);
+
+          const userInfo = order.user_info || {};
+          const telegramId = userInfo.telegram_id;
+
+          if (newStatus === 'completed' && telegramId) {
+            const thankYouMessage = `\n🎉 <b>Order Confirmed!</b>\n-----------------\nHello <b>${userInfo.name || 'Customer'}</b>, your order has been successfully confirmed.\n\nThank you! ✨`;
+            await axios.post(`https://api.telegram.org/bot${token}/sendMessage`, {
+              chat_id: telegramId,
+              text: thankYouMessage,
+              parse_mode: 'HTML'
+            }).catch(() => {});
+          }
+
+          await axios.post(`https://api.telegram.org/bot${token}/answerCallbackQuery`, {
+            callback_query_id: callback_query.id,
+            text: `Order ${newStatus === 'completed' ? 'confirmed' : 'declined'} successfully!`,
+          });
+
+          const baseText = cbMessage.text || 'Order Details';
+          const updatedText = baseText.replace(/⏳ ?Pending/g, statusText) + 
+                              `\n\n🎯 <b>Decision:</b> ${statusText} by Admin`;
+
+          await axios.post(`https://api.telegram.org/bot${token}/editMessageText`, {
+            chat_id: adminId,
+            message_id: cbMessage.message_id,
+            text: updatedText,
+            parse_mode: 'HTML',
+            reply_markup: { inline_keyboard: [] } 
+          }).catch(() => {});
+        }
+      } catch (err) {
+        console.error('Webhook processing error:', err);
       }
-      return res.sendStatus(200);
-    }
+    };
 
-    // 2. Handle callback queries (button clicks)
-    if (!callback_query) {
-      return res.sendStatus(200);
-    }
+    processUpdate();
+  });
 
-    const { data, message: cbMessage, from } = callback_query;
-
-    // Security check: Only allow the configured admin to click buttons
-    if (!adminId || String(from.id) !== String(adminId)) {
-      console.warn(`Unauthorized button click attempt from TG ID: ${from.id}. Admin ID expected: ${adminId}`);
-      await axios.post(`https://api.telegram.org/bot${token}/answerCallbackQuery`, {
-        callback_query_id: callback_query.id,
-        text: '⚠️ You are not authorized to perform this action. Your ID is: ' + from.id,
-        show_alert: true
-      });
-      return res.sendStatus(200);
-    }
-
-    const [action, orderId] = data.split(':');
-    if (!orderId || orderId === 'unknown') {
-      await axios.post(`https://api.telegram.org/bot${token}/answerCallbackQuery`, {
-        callback_query_id: callback_query.id,
-        text: '❌ Invalid Order ID.',
-        show_alert: true
-      });
-      return res.sendStatus(200);
-    }
-
-    const newStatus = action === 'conf' ? 'completed' : 'cancelled';
-    const statusText = action === 'conf' ? '✅ COMPLETED' : '❌ DECLINED';
+  // API to update user balance
+  app.post('/api/update-balance', async (req, res) => {
+    const { telegramId, amount } = req.body;
+    
+    if (!telegramId) return res.status(400).json({ error: 'Missing telegramId' });
 
     try {
-      // 0. Security check for Service Role Key
-      const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY?.trim();
-      if (!serviceRoleKey) {
-        console.error('SUPABASE_SERVICE_ROLE_KEY is missing');
-        await axios.post(`https://api.telegram.org/bot${token}/answerCallbackQuery`, {
-          callback_query_id: callback_query.id,
-          text: '❌ Setup Error: SUPABASE_SERVICE_ROLE_KEY is missing in AI Studio Secrets.',
-          show_alert: true
-        });
-        return res.sendStatus(200);
-      }
-
-      console.log(`Processing Webhook Action: ${action} for Order: ${orderId}`);
-
-      // 1. Get order for telegram_id
-      const { data: order, error: fetchError } = await supabaseAdmin
-        .from('orders')
-        .select('*')
-        .eq('id', orderId)
+      // Get current balance
+      const { data: user, error: fetchError } = await supabaseAdmin
+        .from('users')
+        .select('balance')
+        .eq('telegram_id', telegramId)
         .single();
 
-      if (fetchError || !order) {
-        console.error('Webhook Fetch Error:', fetchError);
-        await axios.post(`https://api.telegram.org/bot${token}/answerCallbackQuery`, {
-          callback_query_id: callback_query.id,
-          text: '❌ Database Error: Could not find order (' + orderId + ')',
-          show_alert: true
-        });
-        return res.sendStatus(200);
-      }
+      if (fetchError) throw fetchError;
 
-      // 2. Update Supabase
-      const { error: dbError } = await supabaseAdmin
-        .from('orders')
-        .update({ status: newStatus })
-        .eq('id', orderId);
+      const newBalance = (user.balance || 0) + Number(amount);
 
-      if (dbError) throw dbError;
+      const { data: updatedUser, error: updateError } = await supabaseAdmin
+        .from('users')
+        .update({ balance: newBalance })
+        .eq('telegram_id', telegramId)
+        .select()
+        .single();
 
-      // 3. Notify Customer if confirmed
-      const userInfo = order.user_info || {};
-      const telegramId = userInfo.telegram_id;
+      if (updateError) throw updateError;
 
-      if (newStatus === 'completed' && telegramId) {
-        const thankYouMessage = `
-🎉 <b>Order Confirmed!</b>
------------------
-Hello <b>${userInfo.name || 'Customer'}</b>, your order has been successfully confirmed.
-
-Thank you for buying! Have a great day! ✨
-        `;
-
-        await axios.post(`https://api.telegram.org/bot${token}/sendMessage`, {
-          chat_id: telegramId,
-          text: thankYouMessage,
-          parse_mode: 'HTML'
-        }).catch(e => console.warn('Could not send thank you message to customer:', telegramId, e.response?.data || e.message));
-      }
-
-      // 4. Answer Callback Query
-      await axios.post(`https://api.telegram.org/bot${token}/answerCallbackQuery`, {
-        callback_query_id: callback_query.id,
-        text: `Order ${newStatus === 'completed' ? 'confirmed' : 'declined'} successfully!`,
-      });
-
-      // 5. Edit original message to remove buttons and show status
-      const baseText = cbMessage.text || 'Order Details';
-      const updatedText = baseText.replace(/⏳ ?Pending/g, statusText) + 
-                          `\n\n🎯 <b>Decision:</b> ${statusText} by Admin at ${new Date().toLocaleTimeString()}`;
-
-      await axios.post(`https://api.telegram.org/bot${token}/editMessageText`, {
-        chat_id: adminId,
-        message_id: cbMessage.message_id,
-        text: updatedText,
-        parse_mode: 'HTML',
-        reply_markup: { inline_keyboard: [] } 
-      }).catch(e => console.warn('Failed to edit admin message:', e.response?.data || e.message));
-
+      res.json({ success: true, balance: updatedUser.balance });
     } catch (err: any) {
-      console.error('Webhook Error:', err);
-      await axios.post(`https://api.telegram.org/bot${token}/answerCallbackQuery`, {
-        callback_query_id: callback_query.id,
-        text: '❌ Error: ' + (err.message || 'Unknown error'),
-        show_alert: true
-      });
+      console.error('Balance update error:', err.message);
+      res.status(500).json({ error: err.message });
     }
+  });
 
-    res.sendStatus(200);
+  // API to get user info
+  app.get('/api/user/:id', async (req, res) => {
+    try {
+      const { data, error } = await supabaseAdmin
+        .from('users')
+        .select('*')
+        .eq('telegram_id', req.params.id)
+        .single();
+
+      if (error) throw error;
+      res.json(data);
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
   });
 
   // Helper route to set the webhook easily
